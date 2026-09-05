@@ -4,6 +4,7 @@ import { GunAudio } from './audio';
 import { WEAPON, moveVelocity, spreadAngle, type Mode, type Session, type Settings } from './model';
 import { ShotCadence, VandalRecoil, sampleSpread } from './vandal';
 import { FlashTrial, FLASH } from './flash';
+import { ReaimTrial } from './reaim';
 
 export class Game {
   session: Session | null = null;
@@ -11,6 +12,9 @@ export class Game {
   yaw = 0; pitch = 0;
   readonly recoil = new VandalRecoil();
   readonly flashTrial = new FlashTrial();
+  readonly reaimTrial = new ReaimTrial();
+  private flashTarget: { index: number; generation: number } | null = null;
+  private botSettings = { speed: 3.24, range: 2 };
   readonly flashSource = new THREE.Mesh(new THREE.IcosahedronGeometry(0.14, 1), new THREE.MeshBasicMaterial({ color: 0xffba68 }));
   private cadence = new ShotCadence();
   get recoilX() { return this.recoil.x; }
@@ -64,10 +68,14 @@ export class Game {
     this.session = { mode, shots: [], kills: 0, elapsed: 0, duration, date: new Date().toISOString(), peekErrors: [] };
     this.flashTrial.reset(this.settings.flashEnabled); this.flashSource.visible = false;
     this.session.flashEnabled = this.settings.flashEnabled; this.session.flashes = this.flashTrial.results;
+    this.reaimTrial.reset(); this.flashTarget = null; this.session.reaim = this.reaimTrial.results;
+    this.session.botMode = this.settings.botMode; this.session.targetShots = []; this.session.targetKills = [];
+    this.botSettings = { speed: this.settings.botSpeed, range: this.settings.botRange };
     this.yaw = this.pitch = this.reloading = this.speed = this.distanceSinceShot = this.shotKick = 0;
     this.recoil.reset(); this.cadence.reset(); this.walking = false;
     this.ammo = WEAPON.magazine; this.stopAt = null;
     this.clearInput(); this.range.setMode(mode, difficulty); this.range.resetPlayer();
+    this.range.configureBots(this.settings.botMode);
     this.range.resize(this.settings.fov, true); this.syncCamera();
   }
   clearInput() { this.keys.clear(); this.trigger = false; this.velocity.set(0, 0); this.speed = 0; this.accumulator = 0; }
@@ -76,6 +84,7 @@ export class Game {
   finish() {
     const result = this.session; if (!result) return;
     result.blindSeconds = this.flashTrial.blindSeconds; this.flashSource.visible = false;
+    this.reaimTrial.end('ended');
     this.pause(); this.session = null; this.range.resize(this.settings.fov, false);
     if (document.pointerLockElement) document.exitPointerLock(); this.onFinish(result);
   }
@@ -101,6 +110,12 @@ export class Game {
     this.ray.set(this.range.camera.position, direction);
     const intersection = this.ray.intersectObjects(this.range.collidables(), false)[0];
     const target = intersection?.object.userData.target as Target | undefined;
+    const intended = target ?? this.aimTarget();
+    const targetMoving = !!intended && intended.speed > 0.1;
+    if (intended) {
+      intended.engagedAt ??= session.elapsed;
+      session.targetShots!.push({ targetMoving, hit: !!target, head: !!target && !!intersection.object.userData.head });
+    }
     const head = !!target && !!intersection.object.userData.head;
     const moving = this.speed > WEAPON.accurateSpeed;
     const qualified = session.mode !== 'stop' || (!moving && this.distanceSinceShot >= 0.65);
@@ -112,10 +127,14 @@ export class Game {
         const leg = !!intersection.object.userData.leg;
         const damage = head ? WEAPON.headDamage : leg ? WEAPON.legDamage : WEAPON.bodyDamage;
         target.hp -= damage;
-        if (target.hp <= 0) { target.group.visible = false; target.respawn = session.elapsed + 0.45; session.kills++; this.distanceSinceShot = 0; this.stopAt = null; }
+        if (target.hp <= 0) {
+          session.targetKills!.push({ moving: targetMoving, seconds: session.elapsed - (target.engagedAt ?? session.elapsed) });
+          target.group.visible = false; target.respawn = session.elapsed + 0.45; session.kills++; this.distanceSinceShot = 0; this.stopAt = null;
+        }
         this.onFeedback(head ? '头部命中' : `${leg ? '腿部' : '身体'}命中 · ${damage}`, head, true);
       } else this.onFeedback(moving ? '开枪过早 · 尚未停稳' : '先完成横移，再停稳射击', false, true);
     } else if (moving && this.settings.assist) this.onFeedback('移动射击 · 散布增加');
+    this.reaimTrial.shot(session.elapsed, target ? this.range.targets.indexOf(target) : null, target?.generation ?? null, !!target && target.hp <= 0);
     const endpoint = intersection?.point ?? this.range.camera.position.clone().addScaledVector(direction, 90);
     const muzzle = new THREE.Vector3(0, 0.045, -0.92); this.range.weapon.localToWorld(muzzle);
     this.range.trace(muzzle, endpoint, !!target);
@@ -140,15 +159,20 @@ export class Game {
     if (this.reloading > 0) { this.reloading = Math.max(0, this.reloading - dt); if (this.reloading === 0) this.ammo = WEAPON.magazine; }
     this.recoil.recover(session.elapsed);
     this.syncCamera();
+    this.range.updateBots(session.elapsed, dt, this.botSettings.speed, this.botSettings.range);
+    this.updateReaim();
     if (this.trigger) this.shoot();
     if (session.flashEnabled) this.updateFlash(dt);
     for (const target of this.range.targets) {
       if (!target.group.visible && session.elapsed >= target.respawn) {
-        target.group.visible = true; target.hp = WEAPON.targetHealth; target.exposed = false;
-        if (session.mode !== 'peek') {
-          target.group.position.x = (Math.random() - 0.5) * (this.range.difficulty === 'easy' ? 10 : 19);
-          target.group.position.z = -7 - Math.random() * (this.range.difficulty === 'hard' ? 24 : 16);
+        const spawn = target.anchor.clone();
+        if (session.mode !== 'peek' && session.botMode === 'static') {
+          spawn.x = (Math.random() - 0.5) * (this.range.difficulty === 'easy' ? 10 : 19);
+          spawn.z = -7 - Math.random() * (this.range.difficulty === 'hard' ? 24 : 16);
         }
+        if (!this.range.targetSpaceFree(spawn, target)) { target.respawn = session.elapsed + 0.2; continue; }
+        target.group.position.copy(spawn); target.group.visible = true; target.hp = WEAPON.targetHealth; target.exposed = false;
+        this.range.resetTargetMotion(target, session.elapsed);
       }
     }
     if (session.mode === 'peek') this.measurePeek();
@@ -163,6 +187,8 @@ export class Game {
   private updateFlash(dt: number) {
     const now = this.session!.elapsed, trial = this.flashTrial, camera = this.range.camera;
     if (trial.warningAt === null && now >= trial.nextAt && now + FLASH.fuse < this.session!.duration) {
+      const target = this.aimTarget();
+      this.flashTarget = target ? { index: this.range.targets.indexOf(target), generation: target.generation } : null;
       const direction = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw + (Math.random() - 0.5) * 1.1);
       this.flashSource.position.copy(camera.position).addScaledVector(direction, 4 + Math.random() * 3);
       this.flashSource.position.y = 2.2;
@@ -173,12 +199,37 @@ export class Game {
     const direction = this.flashSource.position.clone().sub(camera.position), distance = direction.length(); direction.normalize();
     const angle = THREE.MathUtils.radToDeg(camera.getWorldDirection(new THREE.Vector3()).angleTo(direction));
     this.range.scene.updateMatrixWorld(true); this.ray.set(camera.position, direction);
-    const blocker = this.ray.intersectObjects([...this.range.solids, ...(this.session!.mode === 'peek' ? this.range.peekSolids : [])], false)[0];
+    const blocker = this.ray.intersectObjects(this.range.obstacles(), false)[0];
     const result = trial.step(now, dt, angle, !!blocker && blocker.distance < distance);
-    if (result) this.audio.flashCue(true);
+    if (result) {
+      this.audio.flashCue(true);
+      const locked = this.flashTarget, target = locked ? this.range.targets[locked.index] : null;
+      if (result.outcome === 'back' && locked && target?.group.visible && target.generation === locked.generation) this.reaimTrial.begin(locked.index, locked.generation, now);
+    }
     this.flashSource.visible = trial.warningAt !== null;
     this.flashSource.scale.setScalar(1 + (trial.warningAt === null ? 0 : (now - trial.warningAt) / FLASH.fuse));
     this.flashSource.rotation.y += dt * 5;
+  }
+  private targetAngle(target: Target) {
+    if (!target.group.visible) return Infinity;
+    const camera = this.range.camera, direction = target.head.getWorldPosition(new THREE.Vector3()).sub(camera.position);
+    const distance = direction.length(); direction.normalize();
+    this.ray.set(camera.position, direction);
+    const blocker = this.ray.intersectObjects(this.range.obstacles(), false)[0];
+    if (blocker && blocker.distance < distance) return Infinity;
+    return THREE.MathUtils.radToDeg(camera.getWorldDirection(new THREE.Vector3()).angleTo(direction));
+  }
+  private aimTarget() {
+    this.range.scene.updateMatrixWorld(true);
+    let best: Target | undefined, angle = 30;
+    for (const target of this.range.targets) { const candidate = this.targetAngle(target); if (candidate < angle) { angle = candidate; best = target; } }
+    return best;
+  }
+  private updateReaim() {
+    const trial = this.reaimTrial.active; if (!trial) return;
+    const target = this.range.targets[trial.target];
+    this.range.scene.updateMatrixWorld(true);
+    this.reaimTrial.step(this.session!.elapsed, target.group.visible && target.generation === trial.generation, this.targetAngle(target) <= 2);
   }
   private measurePeek() {
     const camera = this.range.camera, forward = new THREE.Vector3(); camera.getWorldDirection(forward);
@@ -188,7 +239,7 @@ export class Game {
       const head = target.head.getWorldPosition(new THREE.Vector3());
       const direction = head.sub(camera.position); const distance = direction.length(); direction.normalize();
       this.ray.set(camera.position, direction);
-      const blocker = this.ray.intersectObjects([...this.range.solids, ...this.range.peekSolids], false)[0];
+      const blocker = this.ray.intersectObjects(this.range.obstacles(), false)[0];
       const angle = THREE.MathUtils.radToDeg(forward.angleTo(direction));
       const visible = (!blocker || blocker.distance > distance) && angle < 60;
       if (visible && !target.exposed && this.speed > 0.5) this.session!.peekErrors!.push(angle);

@@ -50,6 +50,8 @@ npm run test:e2e -- --grep 'desktop range renders|Vandal spray'
 
 `data-flash` 含 warning、nextAt、results、opacity、blindSeconds。关闭调度的内部 nextAt 为 Infinity，JSON 序列化后变为 null。生产构建没有这组 DEV 诊断数据，不把测试钩子作为业务接口。
 
+`data-bots` 提供目标位置、实际速度、动作阶段与存活可见状态；visible 不是遮挡测试结果。`data-reaim` 提供本轮回瞄结果。新功能见 [进阶训练](advanced-training.md)。测试支持 `PLAYWRIGHT_BASE_URL` 覆盖默认 5173 端口；改用其他服务端口时应同步该环境变量。
+
 ## 文档维护
 
 行为和字段变更同步 [实现结构](implementation.md)；闪光规则与统计同步 [闪光训练](flash-training.md)；武器数值、来源和近似假设同步 [狂徒校准](vandal-calibration.md)。新专题加入 [索引](README.md)。只有入口或开发约定改变才更新项目 skill，避免把所有实现细节复制进去。

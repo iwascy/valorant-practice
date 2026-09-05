@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { WEAPON, type Mode } from './model';
+import { createMotion, stepMotion, type BotMotion, type BotMode } from './bots';
 
-export interface Target { group: THREE.Group; head: THREE.Mesh; parts: THREE.Mesh[]; hp: number; respawn: number; exposed: boolean }
+export interface Target { group: THREE.Group; head: THREE.Mesh; parts: THREE.Mesh[]; hp: number; respawn: number; exposed: boolean;
+  motion: BotMotion; anchor: THREE.Vector3; axis: THREE.Vector2; speed: number; generation: number; engagedAt: number | null }
 export class RangeScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(65, 1, 0.04, 150);
@@ -13,6 +15,11 @@ export class RangeScene {
   readonly solids: THREE.Mesh[] = [];
   readonly peekSolids: THREE.Mesh[] = [];
   readonly covers = new THREE.Group();
+  readonly botCovers = new THREE.Group();
+  readonly botSolids: THREE.Mesh[] = [];
+  private botColliders: RAPIER.Collider[] = [];
+  botMode: BotMode = 'static';
+  private motionBounds: THREE.Box3[] = [];
   world!: RAPIER.World;
   player!: RAPIER.RigidBody;
   collider!: RAPIER.Collider;
@@ -49,7 +56,9 @@ export class RangeScene {
     mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
     if (solid) {
       const collider = this.world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(x, y, z));
-      if (parent === this.covers) { this.coverColliders.push(collider); this.peekSolids.push(mesh); } else this.solids.push(mesh);
+      if (parent === this.covers) { this.coverColliders.push(collider); this.peekSolids.push(mesh); }
+      else if (parent === this.botCovers) { this.botColliders.push(collider); this.botSolids.push(mesh); }
+      else this.solids.push(mesh);
     }
     return mesh;
   }
@@ -108,6 +117,9 @@ export class RangeScene {
       this.box(x, 1.5, z + 0.76, 4.7, 0.12, 0.03, 0xc78c4b, this.covers);
     }
     for (let i = 0; i < 5; i++) this.createTarget(i);
+    this.scene.add(this.botCovers);
+    for (let i = 0; i < 5; i++) this.box((i - 2) * 6.5, 1.65, -12 - (i % 2) * 6, 2.8, 3.3, 1.5, 0x708c7f, this.botCovers, true);
+    this.botCovers.visible = false; this.botColliders.forEach(c => c.setEnabled(false));
     this.player = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 0.9, 8));
     this.collider = this.world.createCollider(RAPIER.ColliderDesc.capsule(0.55, 0.3), this.player);
     this.controller = this.world.createCharacterController(0.02); this.controller.setSlideEnabled(true);
@@ -127,7 +139,8 @@ export class RangeScene {
       leg.userData.leg = true; parts.push(leg);
     }
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.09, 24), this.material(0x50695c)); base.position.y = 0.06; group.add(base);
-    const target: Target = { group, head, parts, hp: WEAPON.targetHealth, respawn: 0, exposed: false };
+    const target: Target = { group, head, parts, hp: WEAPON.targetHealth, respawn: 0, exposed: false,
+      motion: createMotion(), anchor: new THREE.Vector3(), axis: new THREE.Vector2(), speed: 0, generation: 0, engagedAt: null };
     for (const part of parts) { part.userData.target = target; part.userData.head = part === head || part === face; }
     group.position.set((index - 2) * 4, 0, -14 - Math.abs(index - 2) * 2); this.targets.push(target);
   }
@@ -168,16 +181,56 @@ export class RangeScene {
     });
     this.world.step();
   }
+  configureBots(mode: BotMode) {
+    this.botMode = mode;
+    this.botCovers.visible = mode === 'peek'; this.botColliders.forEach(c => c.setEnabled(mode === 'peek'));
+    this.covers.visible = this.mode === 'peek' && mode !== 'peek'; this.coverColliders.forEach(c => c.setEnabled(this.covers.visible));
+    this.scene.updateMatrixWorld(true);
+    this.motionBounds = this.obstacles().map(mesh => new THREE.Box3().setFromObject(mesh)).filter(box => box.max.y > 0.2);
+    this.targets.forEach((target, i) => {
+      if (mode !== 'static') { target.group.scale.setScalar(1); target.group.position.y = 0; }
+      if (mode === 'peek') target.group.position.set((i - 2) * 6.5, 0, -14.2 - (i % 2) * 6);
+      this.resetTargetMotion(target, 0);
+    });
+  }
+  resetTargetMotion(target: Target, now: number) {
+    target.anchor.copy(target.group.position); target.axis.set(-target.anchor.x, 8 - target.anchor.z).normalize();
+    target.motion = createMotion(); target.motion.nextAt = now + 0.4 + Math.random() * 1.5;
+    target.speed = 0; target.generation++; target.engagedAt = null;
+  }
+  obstacles() { return [...this.solids, ...(this.covers.visible ? this.peekSolids : []), ...(this.botCovers.visible ? this.botSolids : [])]; }
+  targetSpaceFree(position: THREE.Vector3, target: Target) {
+    const player = this.player.translation();
+    return !this.motionBounds.some(box => position.x > box.min.x - 0.4 && position.x < box.max.x + 0.4 && position.z > box.min.z - 0.4 && position.z < box.max.z + 0.4)
+      && Math.hypot(position.x - player.x, position.z - player.z) >= 0.85
+      && !this.targets.some(other => other !== target && other.group.visible && Math.hypot(position.x - other.group.position.x, position.z - other.group.position.z) < 0.8);
+  }
+  updateBots(now: number, dt: number, speed: number, range: number) {
+    for (const target of this.targets) {
+      if (!target.group.visible) continue;
+      const before = { ...target.motion };
+      stepMotion(target.motion, this.botMode, now, dt, speed, range);
+      const motion = target.motion, axis = this.botMode === 'peek' ? new THREE.Vector2(0, 1) : target.axis;
+      const next = target.anchor.clone().add(new THREE.Vector3(axis.y * motion.x + axis.x * motion.z, 0, -axis.x * motion.x + axis.y * motion.z));
+      const blocked = !this.targetSpaceFree(next, target);
+      if (blocked) { motion.x = before.x; motion.z = before.z; motion.vx = motion.vz = 0; motion.goalX = 0; motion.goalZ = 0; motion.nextAt = now + 0.2; if (this.botMode === 'peek') motion.phase = 'return'; target.speed = 0; }
+      else { target.speed = next.distanceTo(target.group.position) / dt; target.group.position.copy(next); }
+    }
+  }
   lobbyView(time = 0) { this.camera.position.set(10 + Math.sin(time * 0.12) * 0.35, 4.1, 13); this.camera.lookAt(-1, 1.6, -14); this.weapon.visible = false; }
   resetPlayer() { this.player.setTranslation({ x: 0, y: 0.9, z: 8 }, true); this.player.setNextKinematicTranslation({ x: 0, y: 0.9, z: 8 }); this.world.step(); this.weapon.visible = true; }
   move(x: number, z: number) {
     this.controller.computeColliderMovement(this.collider, { x, y: -0.02, z });
     const translation = this.player.translation(), correction = this.controller.computedMovement();
+    if (this.targets.some(t => t.group.visible && Math.hypot(translation.x + correction.x - t.group.position.x, translation.z + correction.z - t.group.position.z) < 0.85
+      && Math.hypot(translation.x + correction.x - t.group.position.x, translation.z + correction.z - t.group.position.z) < Math.hypot(translation.x - t.group.position.x, translation.z - t.group.position.z))) {
+      correction.x = correction.z = 0;
+    }
     this.player.setNextKinematicTranslation({ x: translation.x + correction.x, y: translation.y + correction.y, z: translation.z + correction.z });
     this.world.step();
     return Math.hypot(correction.x, correction.z);
   }
-  collidables() { return [...this.solids, ...(this.mode === 'peek' ? this.peekSolids : []), ...this.targets.filter(t => t.group.visible).flatMap(t => t.parts)]; }
+  collidables() { return [...this.obstacles(), ...this.targets.filter(t => t.group.visible).flatMap(t => t.parts)]; }
   trace(from: THREE.Vector3, to: THREE.Vector3, hit: boolean) {
     const geometry = new THREE.BufferGeometry().setFromPoints([from, to]);
     const mesh = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xffdf9b, transparent: true, opacity: 0.5 }));

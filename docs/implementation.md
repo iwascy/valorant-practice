@@ -11,6 +11,8 @@
 | `src/scene.ts` | `RangeScene` 管理场景与碰撞；`setMode` 配置目标和掩体；`collidables` 返回可被子弹命中的物体 |
 | `src/vandal.ts` | `ShotCadence` 出弹排程；`VandalRecoil` 热度、恢复及镜头偏移；`sampleSpread` 圆锥采样 |
 | `src/flash.ts` | `FlashTrial` 闪光时序；`evaluateFlash` 判定；`summarizeFlashes` 汇总，无 DOM 或 Three.js 依赖 |
+| `src/crosshair.ts` | 分享码解析、准星预览与 HUD 绘制 |
+| `src/bots.ts`、`src/reaim.ts` | 运动状态机、动静目标统计、锁定目标的背闪回瞄状态与汇总 |
 | `src/audio.ts`、`src/vandal-sound.ts` | 本地录音加载、Web Audio 调度、导入和合成回退；`flashCue` 为闪光合成提示音 |
 
 ## 训练生命周期
@@ -19,7 +21,7 @@
 2. `enter` 新建训练或恢复现有训练。Pointer Lock 请求需直接处于用户点击调用链中，不能等音频初始化后才请求。
 3. `Game.start` 创建 `Session`，重置弹匣、后坐力、闪光、位置和输入。此时尚未运行，由鼠标锁定成功事件调用 `resume`。
 4. `loop` 用 requestAnimationFrame 渲染，累积时间后以 `1/120` 秒调用 `step`。单帧累积最多 100 ms，极低 FPS 时训练时间会慢于墙钟。
-5. `step` 先推进 `session.elapsed`，到时立即结算；否则处理移动、换弹、恢复、相机、射击、闪光、目标复活和清角统计。
+5. `step` 先推进 `session.elapsed`，到时立即结算；否则处理移动、换弹、恢复、相机、机器人移动、回瞄、射击、闪光、目标复活和清角统计。
 6. 失去鼠标锁定时暂停。清空按键、扳机、速度和积压时间，保留训练及效果状态；恢复时重置帧时间起点。
 7. `finish` 获取统计，隐藏闪光源、结束训练、退出锁定并调用同步的 `results`。DOM 致盲遮罩在非运行状态隐藏。
 
@@ -36,9 +38,11 @@
 
 ## 设置与持久化
 
-`range-settings` 保存 `DEFAULTS` 推导出的 `Settings`，读取时经过 `sanitizeSettings`。数值有类型和范围检查，布尔值有独立类型检查。`applySettings` 按默认字段寻找同名 input，数值还需要 `<字段名>-value` output；新增字段必须同时修改模型、HTML 和绑定分支。
+`range-settings` 保存 `DEFAULTS` 推导出的 `Settings`，读取时经过 `sanitizeSettings`。数值检查类型和范围，布尔值独立检查，botMode 校验枚举，crosshairCode 经过解析器。`applySettings` 数值字段使用同名 input 和 `<字段名>-value` output；botMode 使用 select，crosshairCode 由独立导入按钮应用。
 
 灵敏度、FOV、音量等由 `applySettings` 更新；闪光开关在 `Game.start` 快照为 `session.flashEnabled`，当前轮不会随设置变更重新调度。
+
+机器人模式、速度和半径同样开局快照；准星即时更新。新增目标样本、回瞄样本及历史摘要的定义见 [进阶训练](advanced-training.md)。所有有效掩体经 `RangeScene.obstacles()` 提供给子弹、闪光与可见性查询。
 
 `range-history` 只保存最近 30 轮摘要，包含模式、日期、命中率、击杀、发数、后坐力设置、难度、武器 profile，以及可选闪光摘要与致盲秒数。旧记录允许缺少新字段。当前最佳命中率只筛选至少 10 发且武器 profile 相同的记录，没有按难度、后坐力强度或闪光开关分组。
 

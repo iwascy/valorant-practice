@@ -21,6 +21,7 @@ test('random flashes persist settings, blind in grey, freeze on pause, score a b
   await page.locator('#settings-dialog .close').click(); await page.reload();
   await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
   await expect(page.locator('input[name=flashEnabled]')).toBeChecked();
+  await page.locator('input[value=precision]').check({ force: true });
   await page.locator('#start').click();
   const state = async () => JSON.parse((await page.locator('#scene').getAttribute('data-flash'))!);
   await expect.poll(async () => (await state()).warning, { timeout: 18000, intervals: [40] }).toBe(true);
@@ -38,13 +39,99 @@ test('random flashes persist settings, blind in grey, freeze on pause, score a b
   await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousemove', { movementX: 180 / (0.07 * 0.35) })));
   await expect.poll(async () => (await state()).results.length, { timeout: 5000 }).toBe(2);
   expect((await state()).results[1].outcome).toBe('back');
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousemove', { movementX: -180 / (0.07 * 0.35) })));
+  await expect.poll(async () => {
+    const results = JSON.parse((await page.locator('#scene').getAttribute('data-reaim'))!);
+    return results[0]?.aim;
+  }, { timeout: 3000 }).toEqual(expect.any(Number));
+  await page.mouse.down(); await page.waitForTimeout(130); await page.mouse.up();
+  await expect.poll(async () => JSON.parse((await page.locator('#scene').getAttribute('data-reaim'))!)[0]?.status).toBe('killed');
+  expect(JSON.parse((await page.locator('#scene').getAttribute('data-reaim'))!)[0].firstShot).toBe(true);
   await page.evaluate(() => document.exitPointerLock()); await page.locator('#finish').click();
   await expect(page.locator('#result-stats')).toContainText('背闪成功');
   await expect(page.locator('#result-stats')).toContainText('50%');
+  await expect(page.locator('#result-stats')).toContainText('平均重新瞄准');
   await page.screenshot({ path: 'test-results/flash-results.png' });
   await page.locator('#retry').click();
   await expect.poll(async () => (await state()).results.length).toBe(0);
   await expect(page.locator('#blind-overlay')).toBeHidden();
+});
+test('crosshair codes preview, reject invalid edits, persist and reset on desktop and mobile', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await ready(page); await page.locator('#settings').click();
+  const code = '0;P;c;8;u;FF3300FF;h;0;d;1;z;3;0b;0;1b;0';
+  await page.locator('#crosshair-code').fill(code); await page.locator('#import-crosshair').click();
+  await expect(page.locator('#crosshair-status')).toContainText('已导入');
+  const pixels = await page.locator('#crosshair-preview').evaluate((canvas: HTMLCanvasElement) => {
+    const context = canvas.getContext('2d')!;
+    return Array.from(context.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data);
+  });
+  expect(pixels).toEqual([255, 51, 0, 255]);
+  const margins = await page.evaluate(async () => {
+    const url = '/src/crosshair.ts', { parseCrosshair, drawCrosshair } = await import(url);
+    const canvas = document.createElement('canvas');
+    const { config } = parseCrosshair('0;P;t;6;0o;40;0l;20;0m;1;0s;3;0f;1;0e;3;1b;0');
+    drawCrosshair(canvas, config, 1, 20);
+    const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let min = canvas.width, max = 0;
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) if (data[(y * canvas.width + x) * 4 + 3]) { min = Math.min(min, x); max = Math.max(max, x); }
+    return { min, max, width: canvas.width };
+  });
+  expect(margins.min).toBeGreaterThan(0); expect(margins.max).toBeLessThan(margins.width - 1);
+  await page.locator('#crosshair-code').fill('0;P;c;99'); await page.locator('#import-crosshair').click();
+  await expect(page.locator('#crosshair-status')).toContainText('超出范围');
+  await page.reload(); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
+  await page.locator('#settings').click(); await expect(page.locator('#crosshair-code')).toHaveValue(code);
+  await page.screenshot({ path: 'test-results/crosshair-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#crosshair-preview').scrollIntoViewIfNeeded();
+  expect(await page.locator('#settings-dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/crosshair-mobile.png' });
+  await page.locator('#reset-crosshair').click(); await expect(page.locator('#crosshair-code')).toHaveValue('');
+  expect(errors).toEqual([]);
+});
+for (const mode of ['depth', 'strafe', 'peek']) test(`bots ${mode} move, pause, resume, render and save target statistics`, async ({ page }) => {
+  await page.addInitScript(() => { let seed = 783; Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; });
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await ready(page); await page.locator('#settings').click();
+  await page.locator('select[name=botMode]').selectOption(mode);
+  await page.locator('#settings-dialog .close').click();
+  await page.locator('input[value=precision]').check({ force: true }); await page.locator('#start').click();
+  await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  const bots = async () => JSON.parse((await page.locator('#scene').getAttribute('data-bots'))!);
+  await expect.poll(async () => (await bots())?.[2]?.speed).toBeGreaterThan(0.2);
+  const active = await bots();
+  expect(mode === 'depth' ? active[2].z : active[2].x).not.toBe(mode === 'depth' ? -12 : 0);
+  if (mode === 'peek') {
+    await expect.poll(async () => (await bots())[2].phase).toBe('hold');
+    expect(Math.abs((await bots())[2].x)).toBeGreaterThan(1.95);
+    expect(await canvasColors(page)).toBeGreaterThan(30);
+    await page.screenshot({ path: 'test-results/bots-peek-exposed.png' });
+    await expect.poll(async () => (await bots())[2].phase).toBe('wait');
+    expect(Math.abs((await bots())[2].x)).toBeLessThan(0.025);
+    await page.screenshot({ path: 'test-results/bots-peek-hidden.png' });
+    await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
+    await expect(page.locator('#kills')).toHaveText('0');
+    await expect.poll(async () => (await bots())[2].phase, { intervals: [30] }).toBe('hold');
+    const target = (await bots())[2];
+    await page.evaluate(({ x, z }) => document.dispatchEvent(new MouseEvent('mousemove', {
+      movementX: Math.atan2(x, 8 - z) * 180 / Math.PI / (0.07 * 0.35),
+    })), target);
+    await page.mouse.down(); await page.waitForTimeout(120); await page.mouse.up();
+    await expect(page.locator('#kills')).toHaveText('1');
+  } else {
+    await page.mouse.down(); await page.waitForTimeout(160); await page.mouse.up();
+  }
+  await page.evaluate(() => document.exitPointerLock()); await expect(page.locator('#pause-dialog')).toBeVisible();
+  const paused = await bots(); await page.waitForTimeout(300); expect(await bots()).toEqual(paused);
+  await page.locator('#resume').click();
+  await expect.poll(async () => (await bots()).some((t: {speed:number}) => t.speed > 0.2)).toBe(true);
+  await page.evaluate(() => document.exitPointerLock()); await page.locator('#finish').click();
+  await expect(page.locator('#result-stats')).toContainText('动靶命中率');
+  const history = await page.evaluate(() => JSON.parse(localStorage.getItem('range-history')!));
+  expect(history[0].botMode).toBe(mode); expect(history[0].targetStats).toHaveLength(2);
+  await page.screenshot({ path: `test-results/bots-${mode}-results.png` });
+  expect(errors).toEqual([]);
 });
 test('desktop range renders, settings persist and precision session pauses and saves', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

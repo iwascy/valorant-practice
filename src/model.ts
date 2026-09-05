@@ -1,17 +1,25 @@
 export type Mode = 'stop' | 'precision' | 'peek';
 export const names: Record<Mode, string> = { stop: '急停点射', precision: '精准点射', peek: '预瞄清角' };
-export const DEFAULTS = { sensitivity: 0.35, fov: 103, recoil: 1, volume: 0.55, crosshairSize: 5, assist: true, flashEnabled: false };
+import { botNames, type BotMode } from './bots.ts';
+import { parseCrosshair } from './crosshair.ts';
+export const DEFAULTS = { sensitivity: 0.35, fov: 103, recoil: 1, volume: 0.55, crosshairSize: 5, assist: true, flashEnabled: false,
+  crosshairCode: '', botMode: 'static' as BotMode, botSpeed: 3.24, botRange: 2 };
 export type Settings = typeof DEFAULTS;
-export const LIMITS: Record<string, [number, number]> = { sensitivity: [0.05, 1], fov: [80, 115], recoil: [0.3, 1.5], volume: [0, 1], crosshairSize: [3, 12] };
+export const LIMITS = { sensitivity: [0.05, 1], fov: [80, 115], recoil: [0.3, 1.5], volume: [0, 1], crosshairSize: [3, 12], botSpeed: [0.5, 5.4], botRange: [0.5, 4] };
 export function sanitizeSettings(raw: unknown): Settings {
   const result = { ...DEFAULTS };
   if (!raw || typeof raw !== 'object') return result;
-  for (const key of Object.keys(LIMITS) as Exclude<keyof Settings, 'assist' | 'flashEnabled'>[]) {
+  for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
     const value = (raw as Record<string, unknown>)[key];
     if (typeof value === 'number' && Number.isFinite(value)) result[key] = Math.max(LIMITS[key][0], Math.min(LIMITS[key][1], value));
   }
   if (typeof (raw as Settings).assist === 'boolean') result.assist = (raw as Settings).assist;
   if (typeof (raw as Settings).flashEnabled === 'boolean') result.flashEnabled = (raw as Settings).flashEnabled;
+  const value = raw as Settings;
+  if (typeof value.botMode === 'string' && Object.hasOwn(botNames, value.botMode)) result.botMode = value.botMode;
+  if (typeof value.crosshairCode === 'string' && value.crosshairCode) {
+    try { parseCrosshair(value.crosshairCode); result.crosshairCode = value.crosshairCode.trim(); } catch { /* Invalid persisted codes fall back to the default. */ }
+  }
   return result;
 }
 // Public Vandal hip-fire values and provenance are recorded in docs/vandal-calibration.md.
@@ -37,7 +45,8 @@ export function spreadAngle(speed: number, heat: number, walking = false): numbe
   return radians(firing + movement * (walking ? WEAPON.walkErrorDegrees : WEAPON.runErrorDegrees));
 }
 export interface Shot { hit: boolean; head: boolean; moving: boolean; x: number; y: number; stopDelay: number | null; time?: number; spread?: number }
-export interface Session { mode: Mode; shots: Shot[]; kills: number; elapsed: number; duration: number; date: string; peekErrors?: number[]; flashEnabled?: boolean; flashes?: import('./flash').FlashResult[]; blindSeconds?: number }
+export interface Session { mode: Mode; shots: Shot[]; kills: number; elapsed: number; duration: number; date: string; peekErrors?: number[]; flashEnabled?: boolean; flashes?: import('./flash').FlashResult[]; blindSeconds?: number;
+  botMode?: BotMode; targetShots?: import('./bots').TargetShot[]; targetKills?: import('./bots').TargetKill[]; reaim?: import('./reaim').ReaimResult[] }
 export function summarize(session: Session) {
   const shots = session.shots;
   const hit = shots.filter(s => s.hit).length;
