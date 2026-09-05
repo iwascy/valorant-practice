@@ -7,6 +7,7 @@
 | `index.html`、`src/style.css` | 原生 DOM、模式选项、HUD、弹窗、设置与移动端布局 |
 | `src/main.ts` | `enter` 请求鼠标锁定；`applySettings` 更新控件；`update` 更新 HUD；`results` 结算并存储 |
 | `src/model.ts` | `Mode`、`DEFAULTS`、`LIMITS`、`sanitizeSettings`、`Session`、伤害与速度参数、基础统计 |
+| `src/preferences.ts`、`src/i18n.ts` | 全局/项目配置、迁移与校验、配置比较键、中英文文案及 DOM 本地化 |
 | `src/game.ts` | `Game.start/pause/resume/finish`、输入、固定步进、开枪、换弹、模式规则与闪光集成 |
 | `src/scene.ts` | `RangeScene` 管理场景与碰撞；`setMode` 配置目标和掩体；`collidables` 返回可被子弹命中的物体 |
 | `src/vandal.ts` | `ShotCadence` 出弹排程；`VandalRecoil` 热度、恢复及镜头偏移；`sampleSpread` 圆锥采样 |
@@ -38,12 +39,12 @@
 
 ## 设置与持久化
 
-`range-settings` 保存 `DEFAULTS` 推导出的 `Settings`，读取时经过 `sanitizeSettings`。数值检查类型和范围，布尔值独立检查，botMode 校验枚举，crosshairCode 经过解析器。`applySettings` 数值字段使用同名 input 和 `<字段名>-value` output；botMode 使用 select，crosshairCode 由独立导入按钮应用。
+`range-preferences` v2 按全局偏好和项目配置保存。`range-settings` 仅用于旧数据迁移。`sanitizeSettings` 校验基础参数，`sanitizeProject` 进一步限制各项目允许的行为。准星代码经过解析器。完整结构、默认值和迁移见 [项目配置与语言](project-settings.md)。
 
-灵敏度、FOV、音量等由 `applySettings` 更新；闪光开关在 `Game.start` 快照为 `session.flashEnabled`，当前轮不会随设置变更重新调度。
+灵敏度、FOV、音量、准星和语言即时应用；`Game.start` 校验并复制 `Session.config`，弹药、后坐力、教学提示、机器人和闪光使用本局快照。无限弹匣仅取消弹药消耗与换弹，不修改狂徒连射状态。
 
 机器人模式、速度和半径同样开局快照；准星即时更新。新增目标样本、回瞄样本及历史摘要的定义见 [进阶训练](advanced-training.md)。所有有效掩体经 `RangeScene.obstacles()` 提供给子弹、闪光与可见性查询。
 
-`range-history` 只保存最近 30 轮摘要，包含模式、日期、命中率、击杀、发数、后坐力设置、难度、武器 profile，以及可选闪光摘要与致盲秒数。旧记录允许缺少新字段。当前最佳命中率只筛选至少 10 发且武器 profile 相同的记录，没有按难度、后坐力强度或闪光开关分组。
+`range-history` 保存最近 30 轮摘要，新增完整项目配置和 `configKey`，结果说明训练条件。最佳命中率筛选至少 10 发、相同武器 profile 及相同项目配置键。旧记录允许缺少新字段，继续展示但不参与配置最佳值比较。
 
 设置值和基础历史字段有校验，但新增的嵌套闪光摘要尚无完整读取校验。后续扩展历史存储时补齐类型检查，不要假定 localStorage 内容可信。动态内容使用 textContent；上传枪声只保留在内存。

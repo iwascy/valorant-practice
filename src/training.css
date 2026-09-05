@@ -8,3 +8,13 @@
 .crosshair-preview { height: 160px; display: flex; align-items: center; justify-content: center; background: #738986; }
 .crosshair-preview canvas { width: 160px; height: 160px; }
 .result-stats small { overflow-wrap: anywhere; }
+#project-settings { display: flex; align-items: center; gap: 10px; margin: 16px 0; text-align: left; min-height: 44px; }
+#project-summary { min-width: 0; overflow-wrap: anywhere; }
+.mode span { min-width: 0; }
+.mode b, h1, h2, .ready, .history-row small { overflow-wrap: anywhere; }
+.history-row small { min-width: 0; }
+.sample-row { flex-wrap: wrap; }
+html[lang=en] h1 { font-size: 38px; }
+html[lang=en] .mode { gap: 10px; }
+html[lang=en] .ready { text-align: center; }
+@media(max-width:760px) { html[lang=en] .mode b { font-size: 11px; } #project-settings { margin: 12px 0; } }

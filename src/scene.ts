@@ -205,11 +205,11 @@ export class RangeScene {
       && Math.hypot(position.x - player.x, position.z - player.z) >= 0.85
       && !this.targets.some(other => other !== target && other.group.visible && Math.hypot(position.x - other.group.position.x, position.z - other.group.position.z) < 0.8);
   }
-  updateBots(now: number, dt: number, speed: number, range: number) {
+  updateBots(now: number, dt: number, speed: number, range: number, peek?: import('./bots').PeekOptions) {
     for (const target of this.targets) {
       if (!target.group.visible) continue;
       const before = { ...target.motion };
-      stepMotion(target.motion, this.botMode, now, dt, speed, range);
+      stepMotion(target.motion, this.botMode, now, dt, speed, range, Math.random, peek);
       const motion = target.motion, axis = this.botMode === 'peek' ? new THREE.Vector2(0, 1) : target.axis;
       const next = target.anchor.clone().add(new THREE.Vector3(axis.y * motion.x + axis.x * motion.z, 0, -axis.x * motion.x + axis.y * motion.z));
       const blocked = !this.targetSpaceFree(next, target);

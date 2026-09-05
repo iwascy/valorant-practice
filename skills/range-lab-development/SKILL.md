@@ -12,6 +12,7 @@ description: 开发和维护 RANGE LAB 网页无畏契约训练场；用于本�
 先读 [文档索引](../../docs/README.md)，按需求选择专题，不必全量加载：
 
 - 模式、输入、计时、设置、历史或结算：读 [实现结构](../../docs/implementation.md)。
+- 全局/项目配置、中英文、无限弹匣或旧数据迁移：读 [项目配置与语言](../../docs/project-settings.md)。
 - 闪光、背闪、掩体和致盲数据：读 [闪光训练](../../docs/flash-training.md)。
 - 准星分享码、机器人运动/出角、动靶和回瞄统计：读 [进阶训练](../../docs/advanced-training.md)。
 - 狂徒散布、后坐力、射速或枪声：读 [校准记录](../../docs/vandal-calibration.md)，改音源时再读 [素材来源](../../public/audio/vandal/SOURCE.md)。
@@ -24,6 +25,8 @@ description: 开发和维护 RANGE LAB 网页无畏契约训练场；用于本�
 训练计时使用 `session.elapsed`，保留暂停、恢复、重开和到时结算语义。闪光效果与枪口火光是不同对象；相机后坐力与弹道后坐力也是不同数据，改动前确认对应入口。
 
 设置新增必须联动校验、HTML 控件和绑定，明确何时生效。历史新增字段兼容旧数据，并检查实际读取类型；不要把 localStorage 当作已验证对象。
+
+全局偏好和项目参数分别保存于 `range-preferences`；项目行为受 `allowedBots` 限制，训练规则读取 `Session.config` 快照。新增项目参数联动 `configKey`，避免混合条件比较成绩。中英文文案在 `i18n.ts` 维护，不根据已翻译的 DOM 文本判断业务状态。无限弹匣只能改变消耗与换弹，不能重置武器连射状态。
 
 机器人、射击和闪光共享有效掩体集合 `RangeScene.obstacles()`。目标跟踪使用索引与 generation，不把复活模型当作同一个生命。动靶统计不能只收集命中而遗漏脱靶，口径以进阶训练文档为准。
 

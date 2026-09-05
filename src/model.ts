@@ -3,7 +3,7 @@ export const names: Record<Mode, string> = { stop: '急停点射', precision: '�
 import { botNames, type BotMode } from './bots.ts';
 import { parseCrosshair } from './crosshair.ts';
 export const DEFAULTS = { sensitivity: 0.35, fov: 103, recoil: 1, volume: 0.55, crosshairSize: 5, assist: true, flashEnabled: false,
-  crosshairCode: '', botMode: 'static' as BotMode, botSpeed: 3.24, botRange: 2 };
+  crosshairCode: '', botMode: 'static' as BotMode, botSpeed: 3.24, botRange: 2, infiniteAmmo: false };
 export type Settings = typeof DEFAULTS;
 export const LIMITS = { sensitivity: [0.05, 1], fov: [80, 115], recoil: [0.3, 1.5], volume: [0, 1], crosshairSize: [3, 12], botSpeed: [0.5, 5.4], botRange: [0.5, 4] };
 export function sanitizeSettings(raw: unknown): Settings {
@@ -15,6 +15,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   }
   if (typeof (raw as Settings).assist === 'boolean') result.assist = (raw as Settings).assist;
   if (typeof (raw as Settings).flashEnabled === 'boolean') result.flashEnabled = (raw as Settings).flashEnabled;
+  if (typeof (raw as Settings).infiniteAmmo === 'boolean') result.infiniteAmmo = (raw as Settings).infiniteAmmo;
   const value = raw as Settings;
   if (typeof value.botMode === 'string' && Object.hasOwn(botNames, value.botMode)) result.botMode = value.botMode;
   if (typeof value.crosshairCode === 'string' && value.crosshairCode) {
@@ -46,6 +47,7 @@ export function spreadAngle(speed: number, heat: number, walking = false): numbe
 }
 export interface Shot { hit: boolean; head: boolean; moving: boolean; x: number; y: number; stopDelay: number | null; time?: number; spread?: number }
 export interface Session { mode: Mode; shots: Shot[]; kills: number; elapsed: number; duration: number; date: string; peekErrors?: number[]; flashEnabled?: boolean; flashes?: import('./flash').FlashResult[]; blindSeconds?: number;
+  config?: import('./preferences').ProjectConfig;
   botMode?: BotMode; targetShots?: import('./bots').TargetShot[]; targetKills?: import('./bots').TargetKill[]; reaim?: import('./reaim').ReaimResult[] }
 export function summarize(session: Session) {
   const shots = session.shots;

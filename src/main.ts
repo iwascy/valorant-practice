@@ -9,30 +9,58 @@ import { summarizeFlashes } from './flash';
 import { botNames, summarizeTargets, type BotMode } from './bots';
 import { summarizeReaim } from './reaim';
 import { defaultCrosshair, parseCrosshair, drawCrosshair } from './crosshair';
+import { allowedBots, configKey, effectiveSettings, projectDefaults, projectKeys, readPreferences, sanitizeProject, type ProjectConfig } from './preferences';
+import { installLocale, setLanguage } from './i18n';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+$('settings-form').append($<HTMLTemplateElement>('global-fields').content);
+for (const name of ['recoil', 'assist']) $('project-form').insertBefore(document.querySelector(`input[name=${name}]`)!.closest('label')!, $('reset-project'));
+$('settings-dialog').querySelector('h2')!.textContent = '全局设置';
+$('settings').title = '全局设置'; $('settings').setAttribute('aria-label', '全局设置');
+document.querySelector('.lobby-bottom span')!.textContent = '同条件最佳命中率';
 const icons = { Zap, Crosshair, ChartNoAxesCombined, Volume2, VolumeX, Settings2, Maximize, MoveHorizontal, ScanLine, CornerUpRight, Play, ArrowUpRight, Layers2, Pause, X, RotateCcw, Upload };
 const refreshIcons = () => createIcons({ icons }); refreshIcons();
 function load(key: string): unknown { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } }
 function save(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { toast('浏览器存储不可用，本次成绩仅在当前页面保留'); } }
-let settings = sanitizeSettings(load('range-settings'));
+const preferences = readPreferences(load('range-preferences'), load('range-settings'), navigator.language);
+let settings = effectiveSettings(preferences, selectedMode());
+installLocale(preferences.language);
 let crosshair = defaultCrosshair(settings.crosshairSize);
 const crosshairCanvas = document.createElement('canvas'); crosshairCanvas.setAttribute('aria-label', '准星'); $('crosshair').replaceChildren(crosshairCanvas);
 interface RecordEntry { mode: Mode; date: string; accuracy: number; kills: number; shots: number; recoil: number; difficulty: string; profile?: string; flashStats?: ReturnType<typeof summarizeFlashes>; blindSeconds?: number;
-  botMode?: BotMode; targetStats?: ReturnType<typeof summarizeTargets>; reaimStats?: ReturnType<typeof summarizeReaim> }
+  config?: ProjectConfig; configKey?: string; botMode?: BotMode; targetStats?: ReturnType<typeof summarizeTargets>; reaimStats?: ReturnType<typeof summarizeReaim> }
 const rawHistory = load('range-history');
 let history: RecordEntry[] = Array.isArray(rawHistory) ? rawHistory.filter((r): r is RecordEntry => !!r && typeof r === 'object' && Object.hasOwn(names, r.mode) && typeof r.date === 'string' && Number.isFinite(Date.parse(r.date)) && Number.isFinite(r.accuracy) && r.accuracy >= 0 && r.accuracy <= 100 && Number.isFinite(r.kills) && Number.isFinite(r.shots)).slice(0, 30) : [];
 let game: Game;
 let feedbackUntil = 0, hitUntil = 0, toastTimeout = 0;
 let initialized = false;
+let importedSample = false;
 const startButton = $<HTMLButtonElement>('start'); startButton.disabled = true;
 function toast(message: string) { $('toast').textContent = message; $('toast').style.display = 'block'; clearTimeout(toastTimeout); toastTimeout = window.setTimeout(() => $('toast').style.display = 'none', 4500); }
 function modal(id: string) { const d = $<HTMLDialogElement>(id); if (!d.open) d.showModal(); }
 function closeDialogs() { document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(d => d.close()); }
-function best() { const value = history.filter(r => r.shots >= 10 && r.profile === WEAPON.profile).reduce((max, r) => Math.max(max, r.accuracy), -1); $('best').textContent = value < 0 ? '--%' : `${value}%`; }
+function best() { const key = configKey(selectedMode(), preferences.projects[selectedMode()]); const value = history.filter(r => r.shots >= 10 && r.profile === WEAPON.profile && r.configKey === key).reduce((max, r) => Math.max(max, r.accuracy), -1); $('best').textContent = value < 0 ? '--%' : `${value}%`; }
 best();
 function selectedMode() { return (document.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value ?? 'stop') as Mode; }
 function applySettings() {
+  const mode = selectedMode(), config = preferences.projects[mode];
+  settings = effectiveSettings(preferences, mode);
+  $<HTMLSelectElement>('language').value = preferences.language;
+  $<HTMLSelectElement>('duration').value = String(config.duration); $<HTMLSelectElement>('difficulty').value = config.difficulty;
+  $('difficulty').closest('label')!.hidden = mode === 'peek' && config.botMode === 'peek';
+  $('project-title').textContent = names[mode];
+  $('project-summary').textContent = `${names[mode]} · 项目配置`;
+  const select = document.querySelector<HTMLSelectElement>('select[name=botMode]')!;
+  select.replaceChildren(...allowedBots[mode].map(value => new Option(mode === 'peek' ? value === 'static' ? '主动清角' : '架枪等出角' : botNames[value], value)));
+  $('peek-side-field').hidden = $('peek-interval-field').hidden = settings.botMode !== 'peek';
+  document.querySelector<HTMLSelectElement>('select[name=peekSide]')!.value = config.peekSide;
+  document.querySelector<HTMLInputElement>('input[name=peekInterval]')!.value = String(config.peekInterval);
+  $('peekInterval-value').textContent = `${config.peekInterval.toFixed(1)} s`;
+  for (const key of ['botSpeed', 'botRange']) {
+    const input = document.querySelector<HTMLInputElement>(`input[name=${key}]`)!;
+    input.max = mode === 'stop' ? '1.5' : key === 'botSpeed' ? '5.4' : '4';
+    input.closest('label')!.hidden = settings.botMode === 'static' || key === 'botRange' && settings.botMode === 'peek';
+  }
   document.documentElement.style.setProperty('--cross-size', `${settings.crosshairSize}px`);
   const imported = settings.crosshairCode ? parseCrosshair(settings.crosshairCode) : null;
   crosshair = imported?.config ?? defaultCrosshair(settings.crosshairSize);
@@ -45,7 +73,7 @@ function applySettings() {
     if (key === 'crosshairCode') continue;
     if (key === 'botMode') { document.querySelector<HTMLSelectElement>('select[name=botMode]')!.value = settings.botMode; continue; }
     const input = document.querySelector<HTMLInputElement>(`input[name=${key}]`)!;
-    if (key === 'assist' || key === 'flashEnabled') input.checked = settings[key];
+    if (key === 'assist' || key === 'flashEnabled' || key === 'infiniteAmmo') input.checked = settings[key];
     else { input.value = String(settings[key]); $(`${key}-value`).textContent = key === 'fov' ? `${settings[key]}°` : key === 'volume' ? `${Math.round(settings[key] * 100)}%` : String(settings[key]); }
   }
   document.querySelector<HTMLInputElement>('input[name=crosshairSize]')!.disabled = !!settings.crosshairCode;
@@ -53,20 +81,23 @@ function applySettings() {
   document.querySelector<HTMLInputElement>('input[name=botSpeed]')!.disabled = settings.botMode === 'static';
   $('botSpeed-value').textContent = `${settings.botSpeed.toFixed(2)} m/s`;
   $('botRange-value').textContent = settings.botMode === 'peek' ? '随机出角距离' : `${settings.botRange.toFixed(1)} m`;
+  if (!game?.session) { $('ammo').textContent = settings.infiniteAmmo ? '∞' : '25'; document.querySelector('.weapon-meta small')!.textContent = settings.infiniteAmmo ? '9.75 RPS · ∞ ROUNDS' : '9.75 RPS · 25 ROUNDS'; }
+  best();
 }
+function persist() { save('range-preferences', preferences); }
 applySettings();
 async function enter(resume = false) {
   if (!initialized) return;
   if (matchMedia('(pointer: coarse)').matches) { toast('训练需要桌面浏览器、鼠标与键盘'); return; }
   closeDialogs();
-  if (!resume) game.start(selectedMode(), $<HTMLSelectElement>('difficulty').value, Number($<HTMLSelectElement>('duration').value));
+  if (!resume) game.start(selectedMode(), $<HTMLSelectElement>('difficulty').value, Number($<HTMLSelectElement>('duration').value), preferences.projects[selectedMode()]);
   document.body.classList.add('playing'); $('hud').hidden = false;
   try {
     // Pointer lock must be requested directly from the user gesture, before awaiting audio setup.
     const locked = game.range.renderer.domElement.requestPointerLock();
     game.audio.init().then(() => {
       game.audio.volume(game.muted ? 0 : settings.volume);
-      if ($('sample-name').textContent?.startsWith('狂徒')) $('sample-name').textContent = game.audio.sourceName;
+      if (!importedSample) $('sample-name').textContent = game.audio.sourceName;
     }).catch(() => toast('音频暂不可用，训练可以继续'));
     await locked;
   } catch {
@@ -86,35 +117,50 @@ document.addEventListener('pointerlockerror', () => { if (game?.session) { game.
 $<HTMLDialogElement>('pause-dialog').addEventListener('cancel', event => event.preventDefault());
 document.querySelectorAll<HTMLButtonElement>('.close').forEach(button => button.addEventListener('click', () => button.closest('dialog')?.close()));
 $('settings').addEventListener('click', () => modal('settings-dialog'));
+$('project-settings').addEventListener('click', () => modal('project-dialog'));
+$('language').addEventListener('change', () => {
+  preferences.language = $<HTMLSelectElement>('language').value === 'en' ? 'en' : 'zh-CN';
+  setLanguage(preferences.language); persist();
+});
 $('settings-form').addEventListener('input', event => {
   const input = event.target as HTMLInputElement;
   if (!Object.hasOwn(DEFAULTS, input.name)) return;
   settings = sanitizeSettings({ ...settings, [input.name]: input.name === 'botMode' ? input.value : input.type === 'checkbox' ? input.checked : Number(input.value) });
-  applySettings(); save('range-settings', settings);
+  preferences.global = { ...preferences.global, [input.name]: settings[input.name as keyof Settings] }; applySettings(); persist();
 });
+$('project-form').addEventListener('input', event => {
+  const input = event.target as HTMLInputElement;
+  const key = input.name || input.id;
+  if (![...projectKeys, 'duration', 'difficulty', 'peekSide', 'peekInterval'].includes(key)) return;
+  const value = key === 'botMode' || key === 'difficulty' || key === 'peekSide' ? input.value : input.type === 'checkbox' ? input.checked : Number(input.value);
+  preferences.projects[selectedMode()] = sanitizeProject(selectedMode(), { ...preferences.projects[selectedMode()], [key]: value });
+  applySettings(); persist();
+});
+$('project-form').addEventListener('submit', event => event.preventDefault());
+$('reset-project').addEventListener('click', () => { preferences.projects[selectedMode()] = projectDefaults(selectedMode()); applySettings(); persist(); });
 $('settings-form').addEventListener('submit', event => event.preventDefault());
 $('import-crosshair').addEventListener('click', () => {
   const code = $<HTMLTextAreaElement>('crosshair-code').value.trim();
-  try { parseCrosshair(code); settings = { ...settings, crosshairCode: code }; applySettings(); save('range-settings', settings); }
+  try { parseCrosshair(code); preferences.global.crosshairCode = code; applySettings(); persist(); }
   catch (error) { $('crosshair-status').textContent = error instanceof Error ? error.message : '分享码无效'; }
 });
-$('reset-crosshair').addEventListener('click', () => { settings = { ...settings, crosshairCode: '' }; applySettings(); save('range-settings', settings); });
-$('reset-settings').addEventListener('click', () => { settings = { ...DEFAULTS }; applySettings(); save('range-settings', settings); });
+$('reset-crosshair').addEventListener('click', () => { preferences.global.crosshairCode = ''; applySettings(); persist(); });
+$('reset-settings').addEventListener('click', () => { preferences.global = readPreferences(null, null).global; applySettings(); persist(); });
 $('sample-file').addEventListener('change', async event => {
   const input = event.target as HTMLInputElement, file = input.files?.[0]; if (!file || !game) return;
   try {
     if (file.size > 5 * 1024 * 1024) throw new Error('音频文件不能超过 5 MB');
     await game.audio.importSample(await file.arrayBuffer()); game.audio.volume(game.muted ? 0 : settings.volume);
-    $('sample-name').textContent = file.name; toast('已载入单发枪声，仅用于当前页面');
+    importedSample = true; $('sample-name').dataset.noI18n = ''; $('sample-name').textContent = file.name; toast('已载入单发枪声，仅用于当前页面');
   } catch (error) { toast(error instanceof Error ? error.message : '无法解码此音频文件'); }
   input.value = '';
 });
-$('clear-sample').addEventListener('click', () => { game?.audio.clearSample(); $('sample-name').textContent = game?.audio.sourceName ?? '狂徒 · 参考录音'; });
+$('clear-sample').addEventListener('click', () => { game?.audio.clearSample(); importedSample = false; delete $('sample-name').dataset.noI18n; $('sample-name').textContent = game?.audio.sourceName ?? '狂徒 · 参考录音'; });
 $('preview-sample').addEventListener('click', async () => {
   if (!game) return;
   try {
     await game.audio.init(); game.audio.volume(game.muted ? 0 : settings.volume); game.audio.shot();
-    if ($('sample-name').textContent?.startsWith('狂徒')) $('sample-name').textContent = game.audio.sourceName;
+    if (!importedSample) $('sample-name').textContent = game.audio.sourceName;
   } catch { toast('音频暂不可用'); }
 });
 $('sound').addEventListener('click', () => {
@@ -131,9 +177,11 @@ $('history').addEventListener('click', () => {
   for (const record of history) {
     const row = document.createElement('div'); row.className = 'history-row';
     const name = document.createElement('span'); name.textContent = names[record.mode];
-    const date = document.createElement('small'); date.textContent = `${new Date(record.date).toLocaleString('zh-CN')} · ${record.kills} 击杀 · ${record.shots} 发 · ${record.profile === WEAPON.profile ? '狂徒' : '旧版'}`;
+    const date = document.createElement('small'); date.textContent = `${new Date(record.date).toLocaleString(preferences.language)} · ${record.kills} 击杀 · ${record.shots} 发 · ${record.profile === WEAPON.profile ? '狂徒' : '旧版'}`;
+    if (record.config) date.textContent += ` · ${configDescription(sanitizeProject(record.mode, record.config))}`;
+    else date.textContent += ' · 旧版配置';
     if (record.flashStats && Number.isFinite(record.flashStats.total)) date.textContent += ` · 背闪 ${record.flashStats.back}/${record.flashStats.total} · 致盲 ${(typeof record.blindSeconds === 'number' && Number.isFinite(record.blindSeconds) ? record.blindSeconds : 0).toFixed(1)}s`;
-    if (record.botMode && Object.hasOwn(botNames, record.botMode)) date.textContent += ` · ${botNames[record.botMode]}`;
+    if (record.botMode && Object.hasOwn(botNames, record.botMode)) date.textContent += ` · ${behaviorName(record.mode, record.botMode)}`;
     if (Array.isArray(record.targetStats)) for (const stats of record.targetStats) {
       if (stats && typeof stats.moving === 'boolean' && Number.isFinite(stats.accuracy)) date.textContent += ` · ${stats.moving ? '动靶' : '静靶'} ${stats.accuracy}%`;
     }
@@ -143,20 +191,30 @@ $('history').addEventListener('click', () => {
   modal('history-dialog');
 });
 function previewRange() { game.range.setMode(selectedMode(), $<HTMLSelectElement>('difficulty').value); game.range.configureBots(settings.botMode); }
-document.querySelectorAll('input[name=mode]').forEach(input => input.addEventListener('change', () => { if (initialized) previewRange(); }));
+document.querySelectorAll('input[name=mode]').forEach(input => input.addEventListener('change', () => applySettings()));
 $('difficulty').addEventListener('change', () => { if (initialized) previewRange(); });
 window.addEventListener('resize', () => { if (game) game.range.resize(settings.fov, !!game.session); });
+function configDescription(config: ProjectConfig) {
+  const movement = config.botMode === 'static' ? '' : ` · ${config.botSpeed.toFixed(2)} m/s` + (config.botMode === 'peek'
+    ? ` · ${{ random: '随机两侧', left: '左侧', right: '右侧' }[config.peekSide]} · ${config.peekInterval.toFixed(1)} s`
+    : ` · ${config.botRange.toFixed(1)} m`);
+  return `${config.duration} 秒 · ${{ easy: '入门', normal: '标准', hard: '进阶' }[config.difficulty]} · ${config.infiniteAmmo ? '无限弹匣' : '标准弹匣'} · ${config.flashEnabled ? '闪光开启' : '闪光关闭'}${movement} · 后坐力 ${config.recoil} · ${config.assist ? '提示开启' : '提示关闭'}`;
+}
+function behaviorName(mode: Mode, bot: BotMode) { return mode === 'peek' ? bot === 'peek' ? '架枪等出角' : '主动清角' : botNames[bot]; }
 function results(session: Session) {
   document.body.classList.remove('playing'); $('hud').hidden = true; closeDialogs();
   const stats = summarize(session);
   const flashStats = summarizeFlashes(session.flashes ?? []);
   const targetStats = summarizeTargets(session.targetShots ?? [], session.targetKills ?? []), reaimStats = summarizeReaim(session.reaim ?? []);
-  history.unshift({ mode: session.mode, date: session.date, accuracy: stats.accuracy, kills: session.kills, shots: stats.shots, recoil: settings.recoil, difficulty: $<HTMLSelectElement>('difficulty').value, profile: WEAPON.profile,
+  history.unshift({ mode: session.mode, date: session.date, accuracy: stats.accuracy, kills: session.kills, shots: stats.shots, recoil: session.config?.recoil ?? settings.recoil, difficulty: session.config?.difficulty ?? 'normal', profile: WEAPON.profile,
+    config: session.config, configKey: session.config ? configKey(session.mode, session.config) : undefined,
     flashStats: session.flashEnabled ? flashStats : undefined, blindSeconds: session.blindSeconds, botMode: session.botMode, targetStats, reaimStats });
   history = history.slice(0, 30); save('range-history', history); best();
-  $('result-mode').textContent = `${names[session.mode]} · ${botNames[session.botMode ?? 'static']} · ${Math.round(session.elapsed)} 秒 · ${stats.shots} 发射击`;
+  $('result-mode').textContent = `${names[session.mode]} · ${behaviorName(session.mode, session.botMode ?? 'static')} · ${Math.round(session.elapsed)} 秒 · ${stats.shots} 发射击`;
+  if (session.config) $('result-mode').textContent += ` · ${configDescription(session.config)}`;
   const peeks = session.peekErrors ?? [], peekAverage = peeks.length ? peeks.reduce((a, b) => a + b, 0) / peeks.length : null;
-  const metrics = [['命中率', `${stats.accuracy}%`], ['击杀', String(session.kills)], ['头部命中', String(stats.headshots)], ['停稳射击', `${stats.clean}%`], ['过早开枪', String(stats.early)], session.mode === 'peek' ? ['出角偏差', peekAverage === null ? '--' : `${peekAverage.toFixed(1)}°`] : ['停稳后开枪', stats.delay === null ? '--' : `${stats.delay} ms`]];
+  const clearing = session.mode === 'peek' && session.botMode !== 'peek';
+  const metrics = [['命中率', `${stats.accuracy}%`], ['击杀', String(session.kills)], ['头部命中', String(stats.headshots)], ['停稳射击', `${stats.clean}%`], ['过早开枪', String(stats.early)], clearing ? ['出角偏差', peekAverage === null ? '--' : `${peekAverage.toFixed(1)}°`] : ['停稳后开枪', stats.delay === null ? '--' : `${stats.delay} ms`]];
   $('result-stats').replaceChildren();
   for (const group of targetStats) {
     const label = group.moving ? '动靶' : '静靶';
@@ -174,7 +232,7 @@ function results(session: Session) {
     ['回瞄首发命中率', reaimStats.firstHit === null ? '--' : `${reaimStats.firstHit}%`], ['背闪后击杀', String(reaimStats.kills)],
     ['背闪后击杀耗时', reaimStats.kill === null ? '--' : `${reaimStats.kill} ms`], ['未完成击杀', String(reaimStats.unfinished)]);
   for (const [label, value] of metrics) { const div = document.createElement('div'), small = document.createElement('small'), b = document.createElement('b'); small.textContent = label; b.textContent = value; div.append(small, b); $('result-stats').append(div); }
-  $('insight').textContent = !stats.shots ? '本轮尚未射击。下一轮从一次准确的点射开始。' : stats.early > stats.shots * 0.15 ? `有 ${stats.early} 发在停稳前射出。先放慢节奏，感受减速完成的时机。` : session.mode === 'peek' && peekAverage !== null ? `出角时平均需要修正 ${peekAverage.toFixed(1)}°。下一轮将准星提前放在掩体边缘的头线位置。` : stats.accuracy < 60 ? '下一轮减少连射，待首发精度恢复后再开枪。' : '停稳与瞄准表现稳定，可以尝试更远的目标与更快的节奏。';
+  $('insight').textContent = !stats.shots ? '本轮尚未射击。下一轮从一次准确的点射开始。' : stats.early > stats.shots * 0.15 ? `有 ${stats.early} 发在停稳前射出。先放慢节奏，感受减速完成的时机。` : clearing && peekAverage !== null ? `出角时平均需要修正 ${peekAverage.toFixed(1)}°。下一轮将准星提前放在掩体边缘的头线位置。` : stats.accuracy < 60 ? '下一轮减少连射，待首发精度恢复后再开枪。' : '停稳与瞄准表现稳定，可以尝试更远的目标与更快的节奏。';
   const ctx = $<HTMLCanvasElement>('shot-chart').getContext('2d')!;
   ctx.clearRect(0, 0, 560, 180); ctx.strokeStyle = '#7a9d8033'; ctx.lineWidth = 1;
   for (let x = 0; x <= 560; x += 28) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 180); ctx.stroke(); }
@@ -198,10 +256,10 @@ function update() {
   if (!game.session) return;
   const session = game.session, stats = summarize(session), remaining = Math.ceil(session.duration - session.elapsed);
   $('timer').textContent = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
-  $('accuracy').textContent = `${stats.accuracy}%`; $('kills').textContent = String(session.kills); $('ammo').textContent = String(game.ammo);
+  $('accuracy').textContent = `${stats.accuracy}%`; $('kills').textContent = String(session.kills); $('ammo').textContent = session.config?.infiniteAmmo ? '∞' : String(game.ammo);
   $('movement').textContent = game.speed <= WEAPON.accurateSpeed ? '已停稳' : '移动中'; $('movement').className = game.speed <= WEAPON.accurateSpeed ? 'stable' : 'moving';
   $('weapon-state').textContent = game.reloading > 0 ? `换弹中 ${game.reloading.toFixed(1)}s` : game.heat > 0 ? '精度恢复中' : '首发就绪';
-  $('movement').hidden = !settings.assist; $('weapon-state').hidden = !settings.assist && !game.reloading;
+  $('movement').hidden = !session.config?.assist; $('weapon-state').hidden = !session.config?.assist && !game.reloading;
   if (import.meta.env.DEV) {
     $('scene').dataset.bots = JSON.stringify(game.range.targets.map(t => ({ x: t.group.position.x, z: t.group.position.z, speed: t.speed, phase: t.motion.phase, visible: t.group.visible })));
     $('scene').dataset.reaim = JSON.stringify(game.reaimTrial.results);

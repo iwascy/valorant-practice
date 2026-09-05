@@ -5,6 +5,7 @@
 | 需求 | 优先阅读 | 实现入口 |
 | --- | --- | --- |
 | 了解模块、训练循环和存储 | [实现结构](implementation.md) | `src/main.ts`、`src/game.ts`、`src/model.ts` |
+| 全局/项目配置、中英文和无限弹匣 | [项目配置与语言](project-settings.md) | `src/preferences.ts`、`src/i18n.ts` |
 | 修改狂徒手感、散布或枪声 | [狂徒校准](vandal-calibration.md)、[音频来源](../public/audio/vandal/SOURCE.md) | `src/vandal.ts`、`src/audio.ts` |
 | 修改闪光、背闪和躲避统计 | [闪光训练](flash-training.md) | `src/flash.ts`、`Game.updateFlash` |
 | 准星导入、机器人移动/出角与背闪回瞄 | [进阶训练](advanced-training.md) | `src/crosshair.ts`、`src/bots.ts`、`src/reaim.ts` |

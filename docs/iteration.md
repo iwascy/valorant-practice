@@ -2,6 +2,8 @@
 
 ## 按改动定位
 
+设置先按 [项目配置与语言](project-settings.md) 确定归属：全局偏好即时生效，项目训练参数开局快照。新增项目字段联动 `ProjectConfig`、默认值、sanitize、UI、配置摘要和 `configKey`；不要再次写入旧 `range-settings`。新增可见文案联动 `i18n.ts`，界面语言不能参与业务状态判断。
+
 | 改动 | 需要检查的连接点 |
 | --- | --- |
 | 新增数值设置 | `DEFAULTS`、`LIMITS`、sanitize、同名 input、对应 output、应用位置、旧设置缺省 |

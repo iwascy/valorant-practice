@@ -16,12 +16,12 @@ async function canvasColors(page: Page) {
 test('random flashes persist settings, blind in grey, freeze on pause, score a back turn and reset', async ({ page }) => {
   test.setTimeout(65000);
   await page.addInitScript(() => { Math.random = () => 0.5; });
-  await ready(page); await page.locator('#settings').click();
+  await ready(page); await page.locator('input[value=precision]').check({ force: true }); await page.locator('#project-settings').click();
   await page.locator('input[name=flashEnabled]').check();
-  await page.locator('#settings-dialog .close').click(); await page.reload();
+  await page.locator('#project-dialog .close').click(); await page.reload();
   await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
-  await expect(page.locator('input[name=flashEnabled]')).toBeChecked();
   await page.locator('input[value=precision]').check({ force: true });
+  await expect(page.locator('input[name=flashEnabled]')).toBeChecked();
   await page.locator('#start').click();
   const state = async () => JSON.parse((await page.locator('#scene').getAttribute('data-flash'))!);
   await expect.poll(async () => (await state()).warning, { timeout: 18000, intervals: [40] }).toBe(true);
@@ -93,10 +93,9 @@ test('crosshair codes preview, reject invalid edits, persist and reset on deskto
 for (const mode of ['depth', 'strafe', 'peek']) test(`bots ${mode} move, pause, resume, render and save target statistics`, async ({ page }) => {
   await page.addInitScript(() => { let seed = 783; Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; });
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await ready(page); await page.locator('#settings').click();
-  await page.locator('select[name=botMode]').selectOption(mode);
-  await page.locator('#settings-dialog .close').click();
-  await page.locator('input[value=precision]').check({ force: true }); await page.locator('#start').click();
+  await ready(page); await page.locator(`input[value=${mode === 'peek' ? 'peek' : 'precision'}]`).check({ force: true });
+  await page.locator('#project-settings').click(); await page.locator('select[name=botMode]').selectOption(mode);
+  await page.locator('#project-dialog .close').click(); await page.locator('#start').click();
   await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
   const bots = async () => JSON.parse((await page.locator('#scene').getAttribute('data-bots'))!);
   await expect.poll(async () => (await bots())?.[2]?.speed).toBeGreaterThan(0.2);
@@ -137,7 +136,7 @@ test('desktop range renders, settings persist and precision session pauses and s
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await ready(page); expect(await canvasColors(page)).toBeGreaterThan(30);
   await page.screenshot({ path: 'test-results/desktop-lobby.png' });
-  await page.getByRole('button', { name: '训练设置', exact: true }).click();
+  await page.getByRole('button', { name: '全局设置', exact: true }).click();
   await page.locator('input[name=sensitivity]').fill('0.42'); await page.locator('input[name=sensitivity]').dispatchEvent('input');
   await page.locator('#settings-dialog .close').click(); await page.reload(); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
   expect(await page.locator('input[name=sensitivity]').inputValue()).toBe('0.42');

@@ -2,15 +2,17 @@ export type BotMode = 'static' | 'depth' | 'strafe' | 'mixed' | 'peek';
 export const botNames: Record<BotMode, string> = { static: '静止', depth: '随机前后', strafe: '左右横移', mixed: '混合移动', peek: '随机出角' };
 export interface BotMotion { x: number; z: number; vx: number; vz: number; goalX: number; goalZ: number; nextAt: number; phase: 'wait' | 'out' | 'hold' | 'return'; }
 export function createMotion(): BotMotion { return { x: 0, z: 0, vx: 0, vz: 0, goalX: 0, goalZ: 0, nextAt: 0, phase: 'wait' }; }
-export function stepMotion(state: BotMotion, mode: BotMode, now: number, dt: number, speed: number, range: number, random = Math.random) {
+export interface PeekOptions { side: 'random' | 'left' | 'right'; interval: number }
+export function stepMotion(state: BotMotion, mode: BotMode, now: number, dt: number, speed: number, range: number, random = Math.random, peek: PeekOptions = { side: 'random', interval: 1.6 }) {
   if (mode === 'static') { state.vx = state.vz = 0; return; }
   const arrived = Math.hypot(state.x - state.goalX, state.z - state.goalZ) < 0.02;
   if (mode === 'peek') {
     if (state.phase === 'wait' && now >= state.nextAt) {
-      state.goalX = (random() < 0.5 ? -1 : 1) * (2 + random() * 0.65); state.phase = 'out';
+      const side = peek.side === 'random' ? random() < 0.5 ? -1 : 1 : peek.side === 'left' ? -1 : 1;
+      state.goalX = side * (2 + random() * 0.65); state.phase = 'out';
     } else if (state.phase === 'out' && arrived) { state.phase = 'hold'; state.nextAt = now + 0.15 + random() * 0.65; }
     else if (state.phase === 'hold' && now >= state.nextAt) { state.goalX = 0; state.phase = 'return'; }
-    else if (state.phase === 'return' && arrived) { state.phase = 'wait'; state.nextAt = now + 0.6 + random() * 2; }
+    else if (state.phase === 'return' && arrived) { state.phase = 'wait'; state.nextAt = now + peek.interval * (0.375 + random() * 1.25); }
   } else if (now >= state.nextAt) {
     const axis = mode === 'mixed' ? (random() < 0.5 ? 'depth' : 'strafe') : mode;
     if (random() < 0.25) {

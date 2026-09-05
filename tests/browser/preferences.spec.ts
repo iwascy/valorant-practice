@@ -1,0 +1,84 @@
+import { test, expect } from '@playwright/test';
+
+test('project settings remain isolated, reset independently and survive reload', async ({ page }) => {
+  await page.goto('/'); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
+  await page.locator('#project-settings').click();
+  await expect(page.locator('select[name=botMode] option')).toHaveCount(2);
+  await page.locator('input[name=infiniteAmmo]').check(); await page.locator('#duration').selectOption('120');
+  await page.locator('#project-dialog .close').click();
+  await page.locator('input[value=precision]').check({ force: true }); await page.locator('#project-settings').click();
+  await expect(page.locator('input[name=infiniteAmmo]')).not.toBeChecked(); await expect(page.locator('#duration')).toHaveValue('60');
+  await expect(page.locator('select[name=botMode] option')).toHaveCount(4);
+  await page.locator('select[name=botMode]').selectOption('mixed'); await page.locator('input[name=flashEnabled]').check();
+  await page.locator('#project-dialog .close').click(); await page.locator('input[value=peek]').check({ force: true });
+  await page.locator('#project-settings').click(); await expect(page.locator('select[name=botMode]')).toHaveValue('static');
+  await expect(page.locator('select[name=botMode] option')).toHaveText(['主动清角', '架枪等出角']);
+  await page.locator('select[name=botMode]').selectOption('peek'); await page.locator('select[name=peekSide]').selectOption('left');
+  await page.locator('#project-dialog .close').click(); await page.locator('#settings').click();
+  await page.locator('input[name=sensitivity]').fill('0.42'); await page.locator('#settings-dialog .close').click();
+  await page.reload(); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
+  await page.locator('#project-settings').click(); await expect(page.locator('input[name=infiniteAmmo]')).toBeChecked();
+  await expect(page.locator('#duration')).toHaveValue('120'); await page.locator('#reset-project').click();
+  await expect(page.locator('input[name=infiniteAmmo]')).not.toBeChecked(); await page.locator('#project-dialog .close').click();
+  await page.locator('input[value=precision]').check({ force: true }); await page.locator('#project-settings').click();
+  await expect(page.locator('select[name=botMode]')).toHaveValue('mixed'); await expect(page.locator('input[name=flashEnabled]')).toBeChecked();
+  await page.locator('#project-dialog .close').click(); await page.locator('#settings').click();
+  await expect(page.locator('input[name=sensitivity]')).toHaveValue('0.42');
+});
+
+test('English settings, infinite firing, session snapshots and bilingual results', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/'); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
+  await page.locator('#settings').click(); await page.locator('#language').selectOption('en');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('#settings-dialog h2')).toHaveText('Global Settings');
+  await page.locator('#crosshair-code').fill('0;P;c;99'); await page.locator('#import-crosshair').click();
+  await expect(page.locator('#crosshair-status')).toHaveText('Crosshair field c is out of range');
+  await page.screenshot({ path: 'test-results/english-global-desktop.png' });
+  await page.locator('#settings-dialog .close').click(); await page.reload();
+  await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true'); await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await page.locator('input[value=precision]').check({ force: true }); await page.locator('#project-settings').click();
+  await page.locator('input[name=infiniteAmmo]').check();
+  await page.screenshot({ path: 'test-results/english-project-desktop.png' });
+  await page.locator('#project-dialog .close').click();
+  const colors = await page.locator('#scene').evaluate((canvas: HTMLCanvasElement) => {
+    const gl = canvas.getContext('webgl2')!, pixels = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
+    gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const unique = new Set<string>(); for (let i = 0; i < pixels.length; i += 400) unique.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`);
+    return unique.size;
+  });
+  expect(colors).toBeGreaterThan(30);
+  await page.locator('#start').click(); await expect.poll(() => page.evaluate(() => !!document.pointerLockElement)).toBe(true);
+  await page.mouse.down();
+  await expect.poll(async () => Number(await page.locator('#scene').getAttribute('data-shots')), { timeout: 10000, intervals: [40] }).toBeGreaterThanOrEqual(35);
+  await page.mouse.up(); await expect(page.locator('#ammo')).toHaveText('∞');
+  const shots = JSON.parse((await page.locator('#scene').getAttribute('data-shot-log'))!) as { time: number; spread: number; y: number }[];
+  expect((shots.length - 1) / (shots.at(-1)!.time - shots[0].time)).toBeCloseTo(9.75, 1);
+  expect(shots[25].spread).toBeCloseTo(Math.PI / 180, 5); expect(shots[25].y).toBeGreaterThan(0.04);
+  await page.keyboard.press('KeyR'); await expect(page.locator('#weapon-state')).not.toContainText('Reloading');
+  await page.screenshot({ path: 'test-results/english-infinite-training.png' });
+  await page.evaluate(() => document.exitPointerLock()); await page.locator('#finish').click();
+  await expect(page.locator('#result-mode')).toContainText('Infinite magazine');
+  await expect(page.locator('#result-stats')).toContainText('Stationary accuracy');
+  expect(await page.locator('#results-dialog').innerText()).not.toMatch(/[\u3400-\u9fff]/);
+  await page.locator('#results-dialog .close').click(); await page.locator('#settings').click();
+  await page.locator('#language').selectOption('zh-CN'); await page.locator('#settings-dialog .close').click();
+  await page.locator('#history').click(); await expect(page.locator('.history-row')).toContainText('无限弹匣');
+  const history = await page.evaluate(() => JSON.parse(localStorage.getItem('range-history')!));
+  expect(history[0].config.infiniteAmmo).toBe(true); expect(history[0].configKey).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test('English mobile project and global dialogs fit without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/'); await expect(page.locator('#scene')).toHaveAttribute('data-ready', 'true');
+  await page.locator('#settings').click(); await page.locator('#language').selectOption('en');
+  await page.screenshot({ path: 'test-results/english-global-mobile.png' });
+  expect(await page.locator('#settings-dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.locator('#settings-dialog .close').click(); await page.screenshot({ path: 'test-results/english-lobby-mobile.png' });
+  await page.locator('input[value=peek]').check({ force: true }); await page.locator('#project-settings').click();
+  await page.locator('select[name=botMode]').selectOption('peek');
+  await page.screenshot({ path: 'test-results/english-project-mobile.png' });
+  expect(await page.locator('#project-dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

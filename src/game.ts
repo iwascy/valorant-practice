@@ -5,6 +5,7 @@ import { WEAPON, moveVelocity, spreadAngle, type Mode, type Session, type Settin
 import { ShotCadence, VandalRecoil, sampleSpread } from './vandal';
 import { FlashTrial, FLASH } from './flash';
 import { ReaimTrial } from './reaim';
+import { sanitizeProject } from './preferences';
 
 export class Game {
   session: Session | null = null;
@@ -64,8 +65,11 @@ export class Game {
     range.renderer.domElement.addEventListener('contextmenu', event => event.preventDefault());
   }
   init() { this.ready = true; this.loop(); }
-  start(mode: Mode, difficulty: string, duration: number) {
-    this.session = { mode, shots: [], kills: 0, elapsed: 0, duration, date: new Date().toISOString(), peekErrors: [] };
+  start(mode: Mode, difficulty: string, duration: number, project?: import('./preferences').ProjectConfig) {
+    const config = sanitizeProject(mode, { ...this.settings, ...project, difficulty, duration });
+    this.settings = { ...this.settings, ...config };
+    this.session = { mode, shots: [], kills: 0, elapsed: 0, duration: config.duration, date: new Date().toISOString(), peekErrors: [] };
+    this.session.config = { ...config };
     this.flashTrial.reset(this.settings.flashEnabled); this.flashSource.visible = false;
     this.session.flashEnabled = this.settings.flashEnabled; this.session.flashes = this.flashTrial.results;
     this.reaimTrial.reset(); this.flashTarget = null; this.session.reaim = this.reaimTrial.results;
@@ -74,7 +78,7 @@ export class Game {
     this.yaw = this.pitch = this.reloading = this.speed = this.distanceSinceShot = this.shotKick = 0;
     this.recoil.reset(); this.cadence.reset(); this.walking = false;
     this.ammo = WEAPON.magazine; this.stopAt = null;
-    this.clearInput(); this.range.setMode(mode, difficulty); this.range.resetPlayer();
+    this.clearInput(); this.range.setMode(mode, config.difficulty); this.range.resetPlayer();
     this.range.configureBots(this.settings.botMode);
     this.range.resize(this.settings.fov, true); this.syncCamera();
   }
@@ -88,7 +92,7 @@ export class Game {
     this.pause(); this.session = null; this.range.resize(this.settings.fov, false);
     if (document.pointerLockElement) document.exitPointerLock(); this.onFinish(result);
   }
-  reload() { if (!this.running || this.reloading > 0 || this.ammo === WEAPON.magazine) return; this.reloading = WEAPON.reload; this.audio.reload(); }
+  reload() { if (!this.running || this.session?.config?.infiniteAmmo || this.reloading > 0 || this.ammo === WEAPON.magazine) return; this.reloading = WEAPON.reload; this.audio.reload(); }
   private syncCamera() {
     const p = this.range.player.translation(); this.range.camera.position.set(p.x, p.y + 0.75, p.z);
     const view = this.recoil.cameraOffset();
@@ -100,7 +104,7 @@ export class Game {
     if (this.reloading > 0) return;
     if (this.ammo === 0) { this.reload(); return; }
     if (!this.cadence.take(session.elapsed)) return;
-    this.ammo--;
+    if (!session.config?.infiniteAmmo) this.ammo--;
     const spread = spreadAngle(this.speed, this.heat, this.walking);
     const { x: spreadX, y: spreadY } = sampleSpread(spread);
     this.syncCamera(); this.range.scene.updateMatrixWorld(true);
@@ -133,12 +137,12 @@ export class Game {
         }
         this.onFeedback(head ? '头部命中' : `${leg ? '腿部' : '身体'}命中 · ${damage}`, head, true);
       } else this.onFeedback(moving ? '开枪过早 · 尚未停稳' : '先完成横移，再停稳射击', false, true);
-    } else if (moving && this.settings.assist) this.onFeedback('移动射击 · 散布增加');
+    } else if (moving && session.config?.assist) this.onFeedback('移动射击 · 散布增加');
     this.reaimTrial.shot(session.elapsed, target ? this.range.targets.indexOf(target) : null, target?.generation ?? null, !!target && target.hp <= 0);
     const endpoint = intersection?.point ?? this.range.camera.position.clone().addScaledVector(direction, 90);
     const muzzle = new THREE.Vector3(0, 0.045, -0.92); this.range.weapon.localToWorld(muzzle);
     this.range.trace(muzzle, endpoint, !!target);
-    this.recoil.kick(session.elapsed, this.settings.recoil, moving && !this.walking);
+    this.recoil.kick(session.elapsed, session.config?.recoil ?? this.settings.recoil, moving && !this.walking);
     this.flashTime = 0.035; this.shotKick = 1; this.audio.shot(this.cadence.scheduledAt);
   }
   private step(dt: number) {
@@ -159,7 +163,8 @@ export class Game {
     if (this.reloading > 0) { this.reloading = Math.max(0, this.reloading - dt); if (this.reloading === 0) this.ammo = WEAPON.magazine; }
     this.recoil.recover(session.elapsed);
     this.syncCamera();
-    this.range.updateBots(session.elapsed, dt, this.botSettings.speed, this.botSettings.range);
+    this.range.updateBots(session.elapsed, dt, this.botSettings.speed, this.botSettings.range,
+      { side: session.config!.peekSide, interval: session.config!.peekInterval });
     this.updateReaim();
     if (this.trigger) this.shoot();
     if (session.flashEnabled) this.updateFlash(dt);
